@@ -1,0 +1,4 @@
+arduino esp32 3.1.0
+arduino_GFX 1.5.1
+LVGL 9.2.2
+mmMicky/Touchlib main
