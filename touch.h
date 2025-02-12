@@ -1,3 +1,6 @@
+#ifndef TOUCH_H    // If TOUCH_H is not already defined
+#define TOUCH_H    // Define it
+
 #include <PCA95x5.h>
 
 #define TOUCH_MODULES_FT5x06
@@ -145,3 +148,5 @@ bool touch_released()
 {
   return false;
 }
+
+#endif // TOUCH_H
