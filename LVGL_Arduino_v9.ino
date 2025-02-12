@@ -3,8 +3,7 @@
 #include <PCA95x5.h>
 #include "Indicator_SWSPI.h"
 #include "touch.h"
-#include "./demos/lv_demos.h"
-// #include "ui_dev.h" // 如果你没有用到 ui_dev.h 里的东西，可以注释掉
+// #include "./demos/lv_demos.h" // 如果你没有用到 ui_dev.h 里的东西，可以注释掉
 #include <time.h>
 #include <WiFi.h>
 
@@ -42,14 +41,14 @@ uint32_t screenWidth, screenHeight, bufSize;
 lv_display_t *disp;
 lv_color_t *disp_draw_buf;
 
-// 时钟 label 对象
-lv_obj_t *time_label;
-lv_obj_t *bg_obj; // 背景框对象 (可选)
+// 时钟 label 对象 (现在不再需要)
+// lv_obj_t *time_label;
+// lv_obj_t *bg_obj; // 背景框对象 (可选)
 
 
 TaskHandle_t lvglTaskHandle = NULL;
 
-void update_clock();  // 前向声明
+// void update_clock();  // 前向声明 (不再需要)
 
 void lvglTask(void *pvParameters) {
     Serial.println("LVGL Task started...");
@@ -86,27 +85,43 @@ void lvglTask(void *pvParameters) {
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, my_touchpad_read);
 
-     // 可选：创建背景框
-    bg_obj = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(bg_obj, 220, 80); // 根据字体大小调整
-    lv_obj_center(bg_obj);
-    lv_obj_set_style_bg_color(bg_obj, lv_color_hex(0x333333), LV_PART_MAIN); // 深灰色背景
-    lv_obj_set_style_radius(bg_obj, 15, LV_PART_MAIN);         // 圆角
-    lv_obj_set_style_border_width(bg_obj, 0, LV_PART_MAIN);   // 无边框
-    lv_obj_set_style_pad_all(bg_obj, 10, LV_PART_MAIN);       // 内边距
+    // 创建 4x4 的彩色方块
+    int rows = 4;
+    int cols = 4;
+    lv_coord_t cell_width = screenWidth / cols;
+    lv_coord_t cell_height = screenHeight / rows;
 
-    // 创建数字时钟的 label
-    time_label = lv_label_create(bg_obj); // 将 label 放在背景框上
-    // lv_obj_set_style_text_font(time_label, &lv_font_montserrat_48, LV_PART_MAIN); // 使用大字体
-    // lv_obj_set_style_text_font(time_label, &lv_font_dejavu_16_persian_hebrew, LV_PART_MAIN);
-    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_24, LV_PART_MAIN);
+     // 定义一个颜色数组，用于给每个方块设置不同的颜色
+    lv_color_t colors[] = {
+        lv_color_hex(0xff0000), // Red
+        lv_color_hex(0x00ff00), // Green
+        lv_color_hex(0x0000ff), // Blue
+        lv_color_hex(0xffff00), // Yellow
+        lv_color_hex(0xff00ff), // Magenta
+        lv_color_hex(0x00ffff), // Cyan
+        lv_color_hex(0x800000), // Maroon
+        lv_color_hex(0x008000), // Olive
+        lv_color_hex(0x000080), // Navy
+        lv_color_hex(0x808000), // Teal
+        lv_color_hex(0x800080), // Purple
+        lv_color_hex(0x008080), // Greenish-blue
+        lv_color_hex(0xc0c0c0), // Silver
+        lv_color_hex(0x808080), // Gray
+        lv_color_hex(0xffa500), // Orange
+        lv_color_hex(0xa52a2a)  // Brown
+    };
+    int num_colors = sizeof(colors) / sizeof(colors[0]);
 
-    lv_obj_set_style_text_color(time_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN); // 亮白色文本
-    lv_obj_center(time_label);
-    
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            lv_obj_t *rect = lv_obj_create(lv_scr_act());
+            lv_obj_set_size(rect, cell_width, cell_height);
+            lv_obj_set_pos(rect, j * cell_width, i * cell_height);
+            lv_obj_set_style_bg_color(rect, colors[(i * cols + j) % num_colors], LV_PART_MAIN); // 使用颜色数组
+            lv_obj_set_style_border_width(rect, 0, LV_PART_MAIN); // 移除边框
+        }
+    }
 
-
-    update_clock(); // 初始更新
 
     Serial.println("LVGL UI initialized.");
 
@@ -124,9 +139,8 @@ void lvglTask(void *pvParameters) {
           gfx->flush();
       #endif
   #endif
-
-        update_clock();
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 每秒更新
+        //update_clock(); //不再需要
+        vTaskDelay(10 / portTICK_PERIOD_MS); // 减少延迟，因为不再需要每秒更新
     }
 }
 
@@ -151,17 +165,9 @@ void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
 }
 
-void update_clock() {
-    time_t now;
-    struct tm timeinfo;
-    char time_str[9]; // HH:MM:SS\0
+// void update_clock() { //不再需要
 
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    strftime(time_str, sizeof(time_str), "%H:%M:%S", &timeinfo); // 格式化时间
-
-    lv_label_set_text(time_label, time_str); // 更新 label 的文本
-}
+// }
 
 void setup() {
     Serial.begin(115200);
