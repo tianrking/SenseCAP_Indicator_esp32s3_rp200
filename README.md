@@ -15,3 +15,12 @@ directories:
 core:
   enable_psram: true
   psram_type: opi
+
+curl -F "file=@your_image.jpg" http://<your_esp32_ip>/upload
+
+curl -F "file=@aa.jpg" http://192.168.238.18/upload
+curl -F "file=@your_image.jpg" http://<your_esp32_ip>/upload
+
+curl -X POST -d "param1=value1¶m2=value2" http://192.168.238.18/upload
+
+curl -X POST -H "Content-Type: application/json" -d '{"key1":"value1", "key2":123}' http://192.168.238.18/upload
