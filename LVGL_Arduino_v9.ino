@@ -45,6 +45,8 @@ lv_color_t *disp_draw_buf;
 lv_obj_t *rects[4][4]; // Global array to store rectangle objects
 
 TaskHandle_t lvglTaskHandle = NULL;
+TaskHandle_t wifiTaskHandle = NULL;  // Handle for the Wi-Fi task
+
 
 lv_color_t colors[] = {
     lv_color_hex(0xff0000), lv_color_hex(0x00ff00), lv_color_hex(0x0000ff),
@@ -154,20 +156,28 @@ void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
 }
 
-void setup() {
-    Serial.begin(115200);
-    Serial.println("ESP32-S3 LVGL Touch Example");
-
-    WiFi.begin(ssid, password); // Connect to Wi-Fi (optional, for your NTP example)
+// WiFi and NTP connection task
+void wifiTask(void *pvParameters) {
+    Serial.println("Connecting to Wi-Fi...");
+    WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
     }
     Serial.println("WiFi connected");
 
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); // Configure time (optional)
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); // Configure time
+    Serial.println("Time configured");
 
-    if (!gfx->begin()) {
+    // Once Wi-Fi is connected and time is configured, the task can be deleted
+    vTaskDelete(NULL);
+}
+
+void setup() {
+    Serial.begin(115200);
+    Serial.println("ESP32-S3 LVGL Touch Example");
+
+     if (!gfx->begin()) {
         Serial.println("gfx->begin() failed!");
         for(;;); // Stop here if the display doesn't initialize
     }
@@ -180,6 +190,9 @@ void setup() {
 
     touch_init(gfx->width(), gfx->height(), gfx->getRotation());
 
+    // Create the Wi-Fi task
+    xTaskCreatePinnedToCore(wifiTask, "WiFi Task", 4096, NULL, 1, &wifiTaskHandle, 1);
+
     // Create the LVGL task with sufficient stack size
     xTaskCreatePinnedToCore(lvglTask, "LVGL Task", 10240, NULL, 1, &lvglTaskHandle, 1);
 
@@ -187,5 +200,5 @@ void setup() {
 }
 
 void loop() {
-    vTaskDelay(portMAX_DELAY); // Keep the main loop empty
+     vTaskDelay(portMAX_DELAY); // Keep the main loop empty
 }
