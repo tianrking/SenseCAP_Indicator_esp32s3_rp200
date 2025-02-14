@@ -82,81 +82,110 @@ void lvglTask(void *pvParameters) {
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, my_touchpad_read);
 
+    // --- Background ---
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x222222), LV_PART_MAIN);
+
     // --- Top Section (4 Cities) ---
     lv_obj_t *topContainer = lv_obj_create(lv_scr_act());
     lv_obj_set_size(topContainer, screenWidth, screenHeight / 2);
-    lv_obj_set_layout(topContainer, LV_LAYOUT_GRID);
-    lv_obj_set_style_pad_all(topContainer, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(topContainer, 0, LV_PART_MAIN); //Remove the border
+    lv_obj_set_layout(topContainer, LV_LAYOUT_GRID); // Grid layout
+    lv_obj_set_style_pad_all(topContainer, 0, LV_PART_MAIN); // No padding *around* the grid
+    lv_obj_set_style_border_width(topContainer, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(topContainer, lv_color_hex(0x333333), LV_PART_MAIN);
 
+    // Grid column and row templates (Corrected heights)
     lv_coord_t col_dsc[] = {screenWidth / 2, screenWidth / 2, LV_GRID_TEMPLATE_LAST};
-    lv_coord_t row_dsc[] = {screenHeight / 4, screenHeight / 4, LV_GRID_TEMPLATE_LAST};
+    lv_coord_t row_dsc[] = {screenHeight / 4, screenHeight / 4, LV_GRID_TEMPLATE_LAST}; // Two rows per city
     lv_obj_set_grid_dsc_array(topContainer, col_dsc, row_dsc);
 
+    // Disable scrolling on the top container
+    lv_obj_clear_flag(topContainer, LV_OBJ_FLAG_SCROLLABLE);
+
     const char *cityNames[] = {"Barcelona", "Istanbul", "Tokyo", "New York"};
-    long timeOffsets[] = {7200, 10800, 32400, -18000}; // Offsets in seconds
+    long timeOffsets[] = {7200, 10800, 32400, -18000}; // Timezone offsets in seconds
 
-    lv_obj_t *cityLabels[4];
     for (int i = 0; i < 4; i++) {
-        cityLabels[i] = lv_label_create(topContainer);
-        lv_obj_set_style_text_font(cityLabels[i], &lv_font_montserrat_22, LV_PART_MAIN); // Smaller font
-        lv_obj_set_style_text_color(cityLabels[i], lv_color_hex(0xffffff), LV_PART_MAIN);
-        lv_label_set_text(cityLabels[i], "00:00:00");
-        lv_obj_set_grid_cell(cityLabels[i], LV_GRID_ALIGN_CENTER, i % 2, 1,
-                             LV_GRID_ALIGN_CENTER, i / 2, 1);
+        // Create a container for *each* city (to hold time and name)
+        lv_obj_t *cityContainer = lv_obj_create(topContainer);
+        lv_obj_set_size(cityContainer, screenWidth / 2, screenHeight / 4);
+        lv_obj_set_layout(cityContainer, LV_LAYOUT_FLEX);  // Use flex layout within each city container
+        lv_obj_set_flex_flow(cityContainer, LV_FLEX_FLOW_COLUMN); // Stack items vertically
+        lv_obj_set_flex_align(cityContainer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(cityContainer, 2, LV_PART_MAIN); // Small padding *inside* each cell
+        lv_obj_set_style_border_width(cityContainer, 1, LV_PART_MAIN); // Add a border
+        lv_obj_set_style_border_color(cityContainer, lv_color_hex(0x555555), LV_PART_MAIN); // Darker gray border
+        lv_obj_set_style_bg_color(cityContainer, lv_color_hex(0x333333), LV_PART_MAIN);
 
-        lv_obj_t *cityNameLabel = lv_label_create(topContainer);
-        lv_obj_set_style_text_font(cityNameLabel, &lv_font_montserrat_18, LV_PART_MAIN); // Smaller font
-        lv_obj_set_style_text_color(cityNameLabel, lv_color_hex(0xaaaaaa), LV_PART_MAIN);
+        // Disable scrolling on city containers too
+        lv_obj_clear_flag(cityContainer, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Place the city container in the grid
+        lv_obj_set_grid_cell(cityContainer, LV_GRID_ALIGN_STRETCH, i % 2, 1,
+                                           LV_GRID_ALIGN_STRETCH, i / 2, 1);
+
+        // Time Label (inside cityContainer)
+        lv_obj_t *cityLabel = lv_label_create(cityContainer);
+        lv_obj_set_style_text_font(cityLabel, &lv_font_montserrat_22, LV_PART_MAIN);
+        lv_obj_set_style_text_color(cityLabel, lv_color_hex(0xdddddd), LV_PART_MAIN);
+        lv_label_set_text(cityLabel, "00:00:00");
+
+        // City Name Label (inside cityContainer)
+        lv_obj_t *cityNameLabel = lv_label_create(cityContainer);
+        lv_obj_set_style_text_font(cityNameLabel, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(cityNameLabel, lv_color_hex(0x888888), LV_PART_MAIN);
         lv_label_set_text(cityNameLabel, cityNames[i]);
-          lv_obj_set_grid_cell(cityNameLabel, LV_GRID_ALIGN_CENTER, i % 2, 1,
-                             LV_GRID_ALIGN_CENTER, (i / 2)+1, 1); // Place in grid
     }
 
     // --- Bottom Section (Hong Kong) ---
     lv_obj_t *hongKongLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(hongKongLabel, &lv_font_montserrat_22, LV_PART_MAIN); // Smaller font
-    lv_obj_set_style_text_color(hongKongLabel, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(hongKongLabel, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_set_style_text_color(hongKongLabel, lv_color_hex(0xADD8E6), LV_PART_MAIN);
     lv_label_set_text(hongKongLabel, "00:00:00");
-    lv_obj_align(hongKongLabel, LV_ALIGN_BOTTOM_MID, 0, -50); // Adjust vertical position
+    lv_obj_align(hongKongLabel, LV_ALIGN_BOTTOM_MID, 0, -50);
 
     lv_obj_t *hongKongCityNameLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(hongKongCityNameLabel, &lv_font_montserrat_18, LV_PART_MAIN); // Smaller Font
-    lv_obj_set_style_text_color(hongKongCityNameLabel, lv_color_hex(0xaaaaaa), LV_PART_MAIN);
+    lv_obj_set_style_text_font(hongKongCityNameLabel, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(hongKongCityNameLabel, lv_color_hex(0x888888), LV_PART_MAIN);
     lv_label_set_text(hongKongCityNameLabel, "Hong Kong");
-    lv_obj_align_to(hongKongCityNameLabel, hongKongLabel, LV_ALIGN_OUT_TOP_MID, 0, -5); // Fine-tune position
+    lv_obj_align_to(hongKongCityNameLabel, hongKongLabel, LV_ALIGN_OUT_TOP_MID, 0, -5);
 
     Serial.println("LVGL UI initialized.");
 
     uint32_t last_lv_task_time = millis();
     while (1) {
         lv_task_handler();
-        if (millis() - last_lv_task_time >= 500) { // Update display less frequently
+        if (millis() - last_lv_task_time >= 500) {
             last_lv_task_time = millis();
 
             struct tm timeinfo;
-            if (getLocalTime(&timeinfo)) { // Get base time (no offset)
+            if (getLocalTime(&timeinfo)) {
 
-              // Update top section cities
-              for (int i = 0; i < 4; i++) {
-                // Apply offset to tm struct
-                struct tm cityTime = timeinfo;
-                cityTime.tm_hour += (timeOffsets[i] / 3600);   // Add hours
-                cityTime.tm_min += (timeOffsets[i] % 3600) / 60; // Add minutes
-                mktime(&cityTime); // Normalize the time (handles overflow)
+                // Find the city containers and update their labels (iterate over children)
+                lv_obj_t * child;
+                uint32_t child_cnt = lv_obj_get_child_cnt(topContainer);
+                for(uint32_t i = 0; i < child_cnt; i++) {
+                    child = lv_obj_get_child(topContainer, i); // Get the city container
+                    if (child) {
+                      lv_obj_t * time_label = lv_obj_get_child(child, 0); // Time label is first child
+                      if(time_label){
+                        struct tm cityTime = timeinfo;
+                        cityTime.tm_hour += (timeOffsets[i] / 3600);
+                        cityTime.tm_min += (timeOffsets[i] % 3600) / 60;
+                        mktime(&cityTime); // Normalize
 
-                char timeString[9];
-                strftime(timeString, sizeof(timeString), "%H:%M:%S", &cityTime);
-                lv_label_set_text(cityLabels[i], timeString);
-              }
+                        char timeString[9];
+                        strftime(timeString, sizeof(timeString), "%H:%M:%S", &cityTime);
+                        lv_label_set_text(time_label, timeString); // Set time text
+                      }
+                    }
+                }
 
-              //Update Hong Kong time
-              struct tm hkTime = timeinfo;
-              hkTime.tm_hour += 8;
-              mktime(&hkTime);
-              char hkTimeString[9];
-              strftime(hkTimeString, sizeof(hkTimeString), "%H:%M:%S", &hkTime);
-              lv_label_set_text(hongKongLabel, hkTimeString);
+                struct tm hkTime = timeinfo;
+                hkTime.tm_hour += 8;  // Hong Kong: GMT+8
+                mktime(&hkTime);
+                char hkTimeString[9];
+                strftime(hkTimeString, sizeof(hkTimeString), "%H:%M:%S", &hkTime);
+                lv_label_set_text(hongKongLabel, hkTimeString);
 
             } else {
                 Serial.println("Failed to obtain time");
