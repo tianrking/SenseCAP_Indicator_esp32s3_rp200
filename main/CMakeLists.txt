@@ -1,4 +1,4 @@
-set(LV_DEMO_DIR ../lvgl/demos)
+set(LV_DEMO_DIR ../components/lvgl/demos)
 file(GLOB_RECURSE LV_DEMOS_SOURCES ${LV_DEMO_DIR}/*.c)
 
 set(LV_DEMO1_DIR ./demo1)
