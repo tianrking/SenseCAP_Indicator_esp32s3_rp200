@@ -54,7 +54,8 @@ void app_main(void)
     // ui_demo2_init();         /* A demo to show virtual tuner */
 
     // --- 调用你自己的 UI 初始化函数 ---
-    my_ui_init(); // <<< 初始化你的自定义界面
+    // my_ui_init(); // <<< 初始化你的自定义界面
+    my_ui_heatmap_init();
 
     lv_port_sem_give(); // 释放 LVGL 信号量
 
