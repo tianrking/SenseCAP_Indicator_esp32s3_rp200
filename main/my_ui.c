@@ -7,13 +7,15 @@
 #include <stdio.h>      // 用于 snprintf
 #include <math.h>       // 用于 isfinite()
 #include <limits.h>     // 用于 UINT32_MAX
+#include <time.h>       // 用于时间函数
 
-static const char *TAG = "MY_UI_TREEMAP_SOLID_CELLS"; // 更新 TAG
+static const char *TAG = "MY_UI_TREEMAP_TIME_STYLE"; // 更新 TAG
 
 // --- 配置 ---
 #define NUM_CELLS 15            // 单元格数量
 #define NUM_SECTORS 6           // 板块数量 (与下拉列表选项对应)
-#define UPDATE_INTERVAL_MS 2000 // 更新间隔 (毫秒)
+#define UPDATE_INTERVAL_MS 2000 // 数据更新间隔 (毫秒)
+#define TIME_UPDATE_INTERVAL_MS 1000 // 时间更新间隔 (毫秒)
 #define CELL_BORDER_WIDTH 1     // 单元格边框宽度
 #define CELL_RADIUS 0           // 单元格圆角半径
 #define CONTAINER_PADDING 5     // 整体容器的内边距
@@ -37,7 +39,9 @@ typedef struct {
 static stock_data_t current_stock_data[NUM_CELLS];
 static treemap_ui_cell_t treemap_ui_cells[NUM_CELLS];
 static lv_timer_t * data_update_timer;
-static int current_sector_index = 0; // 当前选择的板块索引
+static lv_timer_t * time_update_timer;
+static lv_obj_t * time_label;
+static int current_sector_index = 0;
 
 // --- 各板块的股票代码列表 (示例) ---
 const char* sector_tickers[NUM_SECTORS][NUM_CELLS] = {
@@ -57,17 +61,18 @@ const char* sector_tickers[NUM_SECTORS][NUM_CELLS] = {
 
 // --- 私有函数声明 ---
 static void data_update_task(lv_timer_t * timer);
+static void time_update_task(lv_timer_t * timer);
 static void update_treemap_ui(const stock_data_t data_array[]);
 static lv_color_t get_color_for_value(float value);
 static void create_cell_ui_elements(int index, lv_obj_t* parent_cell);
 static void sector_dropdown_event_cb(lv_event_t * e);
 
 /**
- * @brief 初始化模拟 Treemap 界面 (纯色单元格)
+ * @brief 初始化模拟 Treemap 界面 (修改时间样式)
  */
 void my_ui_heatmap_init(void)
 {
-    ESP_LOGI(TAG, "Initializing simulated Treemap UI with Solid Cells..."); // 更新日志
+    ESP_LOGI(TAG, "Initializing simulated Treemap UI with Styled Time..."); // 更新日志
 
     lv_disp_t * disp = lv_disp_get_default();
     if (!disp) { ESP_LOGE(TAG, "Failed to get default display!"); return; }
@@ -143,7 +148,7 @@ void my_ui_heatmap_init(void)
         if (cell_w < 1 || cell_h < 1) { /* ... 跳过无效单元格 ... */ continue; }
 
         lv_obj_t * cell_container = lv_obj_create(main_container);
-        // --- 初始化单元格样式 ---
+        // ... (设置单元格样式) ...
         lv_obj_remove_style_all(cell_container);
         lv_obj_set_pos(cell_container, predefined_areas[i].x1, predefined_areas[i].y1);
         lv_obj_set_size(cell_container, cell_w, cell_h);
@@ -197,19 +202,34 @@ void my_ui_heatmap_init(void)
         lv_obj_set_style_text_color(list, lv_color_white(), LV_PART_SELECTED | LV_STATE_CHECKED);
     }
 
+    // --- 创建时间显示标签 ---
+    time_label = lv_label_create(scr);
+    // --- FIX: 设置时间标签样式 ---
+    lv_obj_set_style_text_color(time_label, lv_color_black(), 0); // <<< 设置为黑色
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_18, 0); // <<< 增大字体到 18
+    // lv_obj_set_style_text_font(time_label, &lv_font_montserrat_20, 0); // 或者尝试 20
+    lv_label_set_text(time_label, "00:00:00");
+    lv_obj_align(time_label, LV_ALIGN_TOP_RIGHT, -10, 10);
 
-    // --- 创建定时器 ---
+    // --- 创建数据更新定时器 ---
     if (data_update_timer) {
         lv_timer_del(data_update_timer);
         data_update_timer = NULL;
     }
     data_update_timer = lv_timer_create(data_update_task, UPDATE_INTERVAL_MS, NULL);
 
-    ESP_LOGI(TAG, "Simulated Treemap UI initialized with Solid Cells.");
+    // --- 创建时间更新定时器 ---
+    if (time_update_timer) {
+        lv_timer_del(time_update_timer);
+        time_update_timer = NULL;
+    }
+    time_update_timer = lv_timer_create(time_update_task, TIME_UPDATE_INTERVAL_MS, NULL);
+
+    ESP_LOGI(TAG, "Simulated Treemap UI initialized with Styled Time.");
 }
 
 /**
- * @brief 创建单个单元格内部的 UI 元素 (标签)
+ * @brief 创建单个单元格内部的 UI 元素 (标签) - 再次增大字体并区分大小 V2
  */
 static void create_cell_ui_elements(int index, lv_obj_t* parent_cell)
 {
@@ -221,12 +241,13 @@ static void create_cell_ui_elements(int index, lv_obj_t* parent_cell)
     lv_obj_t* ticker = lv_label_create(parent_cell);
     lv_label_set_text(ticker, "..."); // Placeholder
     lv_coord_t parent_h = lv_obj_get_height(parent_cell);
-    const lv_font_t* ticker_font = &lv_font_montserrat_12;
-    if (parent_h > 150) ticker_font = &lv_font_montserrat_20;
-    else if (parent_h > 80) ticker_font = &lv_font_montserrat_14;
-    else if (parent_h <= 40) ticker_font = &lv_font_montserrat_10;
+    const lv_font_t* ticker_font;
+    if (parent_h > 180) { ticker_font = &lv_font_montserrat_28; }
+    else if (parent_h > 100) { ticker_font = &lv_font_montserrat_22; }
+    else if (parent_h > 60) { ticker_font = &lv_font_montserrat_18; }
+    else { ticker_font = &lv_font_montserrat_16; } // 最小用 16
     lv_obj_set_style_text_font(ticker, ticker_font, 0);
-    lv_obj_set_style_text_color(ticker, lv_color_white(), 0); // 初始白色
+    lv_obj_set_style_text_color(ticker, lv_color_white(), 0);
     lv_label_set_long_mode(ticker, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(ticker, lv_pct(100));
     lv_obj_set_style_text_align(ticker, LV_TEXT_ALIGN_CENTER, 0);
@@ -234,12 +255,14 @@ static void create_cell_ui_elements(int index, lv_obj_t* parent_cell)
     // 2. Change Label
     lv_obj_t* change = lv_label_create(parent_cell);
     lv_label_set_text(change, " "); // Placeholder
-    const lv_font_t* change_font = &lv_font_montserrat_10;
-    if (parent_h > 150) change_font = &lv_font_montserrat_16;
-    else if (parent_h > 80) change_font = &lv_font_montserrat_12;
+    const lv_font_t* change_font;
+     if (parent_h > 180) { change_font = &lv_font_montserrat_22; }
+    else if (parent_h > 100) { change_font = &lv_font_montserrat_18; }
+    else if (parent_h > 60) { change_font = &lv_font_montserrat_16; }
+    else { change_font = &lv_font_montserrat_14; } // 最小用 14
     lv_obj_clear_flag(change, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font(change, change_font, 0);
-    lv_obj_set_style_text_color(change, lv_color_white(), 0); // 初始白色
+    lv_obj_set_style_text_color(change, lv_color_white(), 0);
     lv_obj_set_width(change, lv_pct(100));
     lv_obj_set_style_text_align(change, LV_TEXT_ALIGN_CENTER, 0);
 
@@ -278,54 +301,59 @@ static void data_update_task(lv_timer_t * timer)
 }
 
 /**
- * @brief 根据传入的数据数组更新整个 Treemap 的 UI 显示 (纯色美化)
+ * @brief 定时任务：更新时间显示
+ */
+static void time_update_task(lv_timer_t * timer)
+{
+    // ... (代码与上一版本相同) ...
+    LV_UNUSED(timer);
+    time_t now;
+    struct tm timeinfo;
+    char time_str[9];
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    if (timeinfo.tm_year > (2016 - 1900)) {
+        strftime(time_str, sizeof(time_str), "%H:%M:%S", &timeinfo);
+    } else {
+        snprintf(time_str, sizeof(time_str), "--:--:--");
+    }
+    if (time_label) {
+        lv_label_set_text(time_label, time_str);
+    }
+}
+
+
+/**
+ * @brief 根据传入的数据数组更新整个 Treemap 的 UI 显示 (纯色)
  */
 static void update_treemap_ui(const stock_data_t data_array[])
 {
+    // ... (代码与上一版本相同) ...
     ESP_LOGD(TAG, "Updating Treemap UI from data (Solid Color)...");
     for (int i = 0; i < NUM_CELLS; ++i) {
         treemap_ui_cell_t *ui_cell = &treemap_ui_cells[i];
         const stock_data_t *data = &data_array[i];
-
         if (ui_cell->cell_obj && ui_cell->ticker_label && ui_cell->change_label) {
             float value = data->value;
             if (!isfinite(value)) { value = 0.0f; }
-
-            // 1. 更新背景色 (纯色)
             lv_color_t base_color = get_color_for_value(value);
             lv_obj_set_style_bg_color(ui_cell->cell_obj, base_color, 0);
-            // --- FIX: 移除渐变色设置 ---
-            // lv_obj_set_style_bg_grad_color(ui_cell->cell_obj, grad_color, 0);
-            // lv_obj_set_style_bg_grad_dir(ui_cell->cell_obj, LV_GRAD_DIR_VER, 0);
-
-            // 2. 更新边框颜色 (使用比背景色稍暗或稍亮的颜色，增加对比度)
             lv_color_t border_color;
             uint8_t brightness = lv_color_brightness(base_color);
-            if (brightness > 128) {
-                 border_color = lv_color_darken(base_color, LV_OPA_20); // 亮背景用稍暗边框
-            } else {
-                 border_color = lv_color_lighten(base_color, LV_OPA_20); // 暗背景用稍亮边框
-            }
+            if (brightness > 128) { border_color = lv_color_darken(base_color, LV_OPA_20); }
+            else { border_color = lv_color_lighten(base_color, LV_OPA_20); }
             lv_obj_set_style_border_color(ui_cell->cell_obj, border_color, 0);
-
-            // 3. 更新 Ticker 标签文本
             lv_label_set_text(ui_cell->ticker_label, data->ticker_symbol);
-
-            // 4. 更新 Change% 标签文本
             char buffer[16];
             float percentage_value = value * 100.0f;
             if (isfinite(percentage_value)) {
                 int written = snprintf(buffer, sizeof(buffer), "%+.2f%%", percentage_value);
-                if (written >= 0 && written < sizeof(buffer)) {
-                    lv_label_set_text(ui_cell->change_label, buffer);
-                } else { lv_label_set_text(ui_cell->change_label, "ERR"); }
+                if (written >= 0 && written < sizeof(buffer)) { lv_label_set_text(ui_cell->change_label, buffer); }
+                else { lv_label_set_text(ui_cell->change_label, "ERR"); }
             } else { lv_label_set_text(ui_cell->change_label, "N/A"); }
-
-            // 5. 根据背景色调整文本颜色
-            lv_color_t text_color = (brightness < 128) ? lv_color_white() : lv_color_black(); // 阈值可调整
+            lv_color_t text_color = (brightness < 128) ? lv_color_white() : lv_color_black();
             lv_obj_set_style_text_color(ui_cell->ticker_label, text_color, 0);
             lv_obj_set_style_text_color(ui_cell->change_label, text_color, 0);
-
         } else { ESP_LOGW(TAG, "UI elements for cell %d missing.", i); }
     }
      ESP_LOGD(TAG, "Treemap UI update complete.");
@@ -339,22 +367,21 @@ static lv_color_t get_color_for_value(float value)
 {
     // ... (代码与上一版本相同) ...
     if (!isfinite(value)) { return lv_color_hex(0x303030); }
-    float clamped_value = LV_CLAMP(-0.05f, value, 0.05f); // 使用 +/- 5% 范围映射颜色
-
-    if (clamped_value > 0.0005f) { // 正值 (绿色区间)
+    float clamped_value = LV_CLAMP(-0.05f, value, 0.05f);
+    if (clamped_value > 0.0005f) {
         lv_color_t dark_green = lv_color_hex(0x005000);
         lv_color_t bright_green = lv_color_hex(0x32CD32);
         uint8_t mix_ratio = (uint8_t)(clamped_value * 20.0f * 255.0f);
         mix_ratio = LV_MIN(mix_ratio, 255);
         return lv_color_mix(bright_green, dark_green, mix_ratio);
-    } else if (clamped_value < -0.0005f) { // 负值 (红色区间)
+    } else if (clamped_value < -0.0005f) {
         lv_color_t dark_red = lv_color_hex(0x600000);
         lv_color_t bright_red = lv_color_hex(0xFF4500);
         uint8_t mix_ratio = (uint8_t)(-clamped_value * 20.0f * 255.0f);
          mix_ratio = LV_MIN(mix_ratio, 255);
         return lv_color_mix(bright_red, dark_red, mix_ratio);
-    } else { // 接近 0 (灰色)
-        return lv_color_hex(0x303030); // 深灰色
+    } else {
+        return lv_color_hex(0x303030);
     }
 }
 
@@ -385,14 +412,34 @@ static void sector_dropdown_event_cb(lv_event_t * e)
 void my_ui_heatmap_deinit(void)
 {
     ESP_LOGI(TAG, "Deinitializing Treemap UI...");
+    // 删除数据更新定时器
     if (data_update_timer) {
         lv_timer_del(data_update_timer);
         data_update_timer = NULL;
     }
-    // 删除下拉列表 (如果需要)
-    // lv_obj_del(sector_dropdown); // 需要将下拉列表对象设为静态或全局变量
+    // 删除时间更新定时器
+    if (time_update_timer) {
+        lv_timer_del(time_update_timer);
+        time_update_timer = NULL;
+    }
 
-    // ... (删除单元格和容器) ...
+    // 删除下拉列表 (需要将其设为静态或全局变量才能在这里访问)
+    // if(sector_dropdown) lv_obj_del(sector_dropdown);
+
+    // 删除时间标签
+    // if(time_label) lv_obj_del(time_label); // time_label 已经是静态全局
+
+    // 删除单元格
+    for (int i = 0; i < NUM_CELLS; ++i) {
+        if (treemap_ui_cells[i].cell_obj) {
+            lv_obj_del(treemap_ui_cells[i].cell_obj);
+            treemap_ui_cells[i].cell_obj = NULL;
+            // ...
+        }
+    }
+    // 删除主容器 (需要将其设为静态或全局变量才能在这里访问)
+    // if(main_container) lv_obj_del(main_container);
+
     ESP_LOGI(TAG, "Treemap UI deinitialized.");
 }
 */
