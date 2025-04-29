@@ -1,445 +1,333 @@
 // my_ui.c
 #include "my_ui.h"
-#include "esp_log.h"
-#include "esp_random.h" // 用于生成随机数
-#include <stdlib.h>     // 标准库
-#include <string.h>     // 用于 memset
-#include <stdio.h>      // 用于 snprintf
-#include <math.h>       // 用于 isfinite()
-#include <limits.h>     // 用于 UINT32_MAX
-#include <time.h>       // 用于时间函数
+#include "lvgl.h"
+#include <math.h>   // For sinf, cosf, M_PI
+#include <stdlib.h> // For rand, abs
 
-static const char *TAG = "MY_UI_TREEMAP_TIME_STYLE"; // 更新 TAG
+// --- Configuration for 480x480 Screen ---
+#define SCREEN_WIDTH 480
+#define SCREEN_HEIGHT 480
 
-// --- 配置 ---
-#define NUM_CELLS 15            // 单元格数量
-#define NUM_SECTORS 6           // 板块数量 (与下拉列表选项对应)
-#define UPDATE_INTERVAL_MS 2000 // 数据更新间隔 (毫秒)
-#define TIME_UPDATE_INTERVAL_MS 1000 // 时间更新间隔 (毫秒)
-#define CELL_BORDER_WIDTH 1     // 单元格边框宽度
-#define CELL_RADIUS 0           // 单元格圆角半径
-#define CONTAINER_PADDING 5     // 整体容器的内边距
-#define CELL_GAP 3              // 单元格之间的间隙
-#define MAX_TICKER_LEN 8        // 股票代码最大长度
+#define MAX_ELECTRONS 10 // Maximum electrons for Neon
+#define MAX_SHELLS 2     // Maximum shells needed for the first 10 elements
 
-// --- 数据接口结构体 ---
+// Adjusted sizes for better look on 480x480
+// Make radii slightly smaller if buttons need more space without overlap
+#define NUCLEUS_RADIUS 18
+#define ELECTRON_RADIUS 7
+#define SHELL1_RADIUS 80
+#define SHELL2_RADIUS 140  // Max radius is 140 + 7 = 147. Center Y is 240. Plenty of space.
+#define ORBIT_LINE_WIDTH 2
+
+#define ANIMATION_TIME_MS 6000 // Animation time
+
+// --- Data Structure for Elements (No changes) ---
 typedef struct {
-    char ticker_symbol[MAX_TICKER_LEN];
-    float value;
-} stock_data_t;
+    const char *symbol;
+    const char *name;
+    uint8_t total_electrons;
+    uint8_t electrons_per_shell[MAX_SHELLS]; // [Shell 1, Shell 2]
+} element_info_t;
 
-// --- UI 元素存储结构体 ---
-typedef struct {
-    lv_obj_t* cell_obj;
-    lv_obj_t* ticker_label;
-    lv_obj_t* change_label;
-} treemap_ui_cell_t;
-
-// --- 全局/静态变量 ---
-static stock_data_t current_stock_data[NUM_CELLS];
-static treemap_ui_cell_t treemap_ui_cells[NUM_CELLS];
-static lv_timer_t * data_update_timer;
-static lv_timer_t * time_update_timer;
-static lv_obj_t * time_label;
-static int current_sector_index = 0;
-
-// --- 各板块的股票代码列表 (示例) ---
-const char* sector_tickers[NUM_SECTORS][NUM_CELLS] = {
-    // Sector 0: Tech Services
-    {"AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "CRM", "ACN", "ORCL", "IBM", "ADP", "NOW", "INTU", "FISV", "UBER"},
-    // Sector 1: Electronics
-    {"NVDA", "AVGO", "ASML", "TXN", "QCOM", "AMD", "INTC", "MU", "ADI", "LRCX", "AMAT", "KLAC", "CSCO", "STM", "NXPI"},
-    // Sector 2: Finance
-    {"JPM", "V", "MA", "BAC", "WFC", "MS", "GS", "BLK", "AXP", "SPGI", "C", "SCHW", "PNC", "USB", "CB"},
-    // Sector 3: Retail
-    {"WMT", "COST", "HD", "TGT", "LOW", "TJX", "DG", "ORLY", "AZO", "ROST", "BBY", "KR", "DLTR", "EBAY", "ETSY"},
-    // Sector 4: Health Tech
-    {"LLY", "JNJ", "UNH", "MRK", "ABBV", "PFE", "TMO", "DHR", "ABT", "BMY", "AMGN", "GILD", "ISRG", "MDT", "SYK"},
-    // Sector 5: Others
-    {"XOM", "CVX", "NEE", "DUK", "SO", "LIN", "UPS", "CAT", "DE", "HON", "GE", "RTX", "LMT", "BA", "UNP"}
+// Data for the first 10 elements (No changes)
+static const element_info_t elements[10] = {
+    {"H",  "Hydrogen", 1, {1, 0}},
+    {"He", "Helium",   2, {2, 0}},
+    {"Li", "Lithium",  3, {2, 1}},
+    {"Be", "Beryllium",4, {2, 2}},
+    {"B",  "Boron",    5, {2, 3}},
+    {"C",  "Carbon",   6, {2, 4}},
+    {"N",  "Nitrogen", 7, {2, 5}},
+    {"O",  "Oxygen",   8, {2, 6}},
+    {"F",  "Fluorine", 9, {2, 7}},
+    {"Ne", "Neon",    10, {2, 8}}
 };
 
-// --- 私有函数声明 ---
-static void data_update_task(lv_timer_t * timer);
-static void time_update_task(lv_timer_t * timer);
-static void update_treemap_ui(const stock_data_t data_array[]);
-static lv_color_t get_color_for_value(float value);
-static void create_cell_ui_elements(int index, lv_obj_t* parent_cell);
-static void sector_dropdown_event_cb(lv_event_t * e);
+// --- Static UI Variables ---
+// Rename main_container to animation_canvas as it covers the whole screen now
+static lv_obj_t * animation_canvas;     // Full screen container for animation + overlay elements
+static lv_obj_t * button_container;     // Container for element buttons (Overlay Bottom)
+static lv_obj_t * element_label;        // Label to display element name/symbol (Overlay Top)
+static lv_obj_t * nucleus_obj;          // Object representing the nucleus
+static lv_obj_t * electron_objs[MAX_ELECTRONS]; // Array to hold electron objects
+static lv_obj_t * orbit_objs[MAX_SHELLS];   // Array to hold orbit line objects
+static lv_anim_t electron_anims[MAX_ELECTRONS]; // Array to hold electron animations
+static uint8_t current_element_index = 0; // Index of the currently displayed element
+static lv_coord_t center_x; // Center of the full screen
+static lv_coord_t center_y; // Center of the full screen
+
+// --- Forward Declarations ---
+static void create_element_display(uint8_t element_index);
+static void clear_element_display(void);
+static void electron_anim_exec_cb(void * var, int32_t v);
+static void element_select_event_cb(lv_event_t * e);
+
+// --- Style Definitions ---
+static lv_style_t style_nucleus;
+static lv_style_t style_electron;
+static lv_style_t style_shell_line; // Style for drawing orbits
+static lv_style_t style_button;     // Custom button style
+
+// --- Function Implementations ---
 
 /**
- * @brief 初始化模拟 Treemap 界面 (修改时间样式)
+ * @brief Callback function for electron animation. Calculates and sets position.
  */
-void my_ui_heatmap_init(void)
-{
-    ESP_LOGI(TAG, "Initializing simulated Treemap UI with Styled Time..."); // 更新日志
+static void electron_anim_exec_cb(void * var, int32_t v) {
+    // (No changes needed in this function)
+    lv_obj_t * obj = (lv_obj_t *)var;
+    lv_coord_t radius = (lv_coord_t)(lv_uintptr_t)lv_obj_get_user_data(obj);
+    float angle_rad = (float)(v % 360) * M_PI / 180.0f;
+    // Use the globally calculated screen center_x, center_y
+    lv_coord_t x = center_x + (lv_coord_t)(radius * cosf(angle_rad)) - ELECTRON_RADIUS;
+    lv_coord_t y = center_y + (lv_coord_t)(radius * sinf(angle_rad)) - ELECTRON_RADIUS;
+    lv_obj_set_pos(obj, x, y);
+}
 
-    lv_disp_t * disp = lv_disp_get_default();
-    if (!disp) { ESP_LOGE(TAG, "Failed to get default display!"); return; }
-    lv_coord_t screen_width = lv_disp_get_hor_res(disp);
-    lv_coord_t screen_height = lv_disp_get_ver_res(disp);
-    ESP_LOGI(TAG, "Detected screen size: %dx%d", screen_width, screen_height);
-    if (screen_width <= 0 || screen_height <= 0) { ESP_LOGE(TAG, "Invalid screen dimensions!"); return; }
-
-    lv_obj_t * scr = lv_scr_act();
-    lv_obj_clean(scr);
-
-    // --- 创建背景容器 ---
-    lv_obj_t * main_container = lv_obj_create(scr);
-    lv_obj_set_size(main_container, screen_width, screen_height);
-    lv_obj_set_style_pad_all(main_container, CONTAINER_PADDING, 0);
-    lv_obj_set_style_border_width(main_container, 0, 0);
-    lv_obj_set_style_bg_color(main_container, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(main_container, LV_OPA_COVER, 0);
-    lv_obj_align(main_container, LV_ALIGN_CENTER, 0, 0);
-
-    // --- 计算内容区域尺寸 ---
-    lv_coord_t cont_w = screen_width - 2 * CONTAINER_PADDING;
-    lv_coord_t cont_h = screen_height - 2 * CONTAINER_PADDING;
-    ESP_LOGI(TAG, "Calculated container content area size: %dx%d", cont_w, cont_h);
-    if (cont_w <= 0 || cont_h <= 0) { ESP_LOGE(TAG, "Invalid container content dimensions!"); return; }
-
-    // --- 定义 15 个单元格的布局 ---
-    lv_area_t predefined_areas[NUM_CELLS];
-    // ... (布局计算与之前相同) ...
-     // Cell 0 (1/4)
-    predefined_areas[0].x1 = CELL_GAP; predefined_areas[0].y1 = CELL_GAP;
-    predefined_areas[0].x2 = cont_w / 2 - CELL_GAP; predefined_areas[0].y2 = cont_h / 2 - CELL_GAP;
-    // Cell 1, 2 (1/8)
-    predefined_areas[1].x1 = cont_w / 2 + CELL_GAP; predefined_areas[1].y1 = CELL_GAP;
-    predefined_areas[1].x2 = cont_w - CELL_GAP; predefined_areas[1].y2 = cont_h / 4 - CELL_GAP;
-    predefined_areas[2].x1 = cont_w / 2 + CELL_GAP; predefined_areas[2].y1 = cont_h / 4 + CELL_GAP;
-    predefined_areas[2].x2 = cont_w - CELL_GAP; predefined_areas[2].y2 = cont_h / 2 - CELL_GAP;
-    // Cell 3, 4, 5, 6 (1/16)
-    predefined_areas[3].x1 = CELL_GAP; predefined_areas[3].y1 = cont_h / 2 + CELL_GAP;
-    predefined_areas[3].x2 = cont_w / 4 - CELL_GAP; predefined_areas[3].y2 = cont_h * 3 / 4 - CELL_GAP;
-    predefined_areas[4].x1 = cont_w / 4 + CELL_GAP; predefined_areas[4].y1 = cont_h / 2 + CELL_GAP;
-    predefined_areas[4].x2 = cont_w / 2 - CELL_GAP; predefined_areas[4].y2 = cont_h * 3 / 4 - CELL_GAP;
-    predefined_areas[5].x1 = CELL_GAP; predefined_areas[5].y1 = cont_h * 3 / 4 + CELL_GAP;
-    predefined_areas[5].x2 = cont_w / 4 - CELL_GAP; predefined_areas[5].y2 = cont_h - CELL_GAP;
-    predefined_areas[6].x1 = cont_w / 4 + CELL_GAP; predefined_areas[6].y1 = cont_h * 3 / 4 + CELL_GAP;
-    predefined_areas[6].x2 = cont_w / 2 - CELL_GAP; predefined_areas[6].y2 = cont_h - CELL_GAP;
-    // Cell 7-14 (1/32)
-    lv_coord_t br_x_start = cont_w / 2; lv_coord_t br_y_start = cont_h / 2;
-    lv_coord_t br_w = cont_w / 2; lv_coord_t br_h = cont_h / 2;
-    lv_coord_t small_cell_w = br_w / 2; lv_coord_t small_cell_h = br_h / 4;
-    int cell_idx = 7;
-    for (int row = 0; row < 4; ++row) {
-        for (int col = 0; col < 2; ++col) {
-            if (cell_idx < NUM_CELLS) {
-                predefined_areas[cell_idx].x1 = br_x_start + col * small_cell_w + CELL_GAP;
-                predefined_areas[cell_idx].y1 = br_y_start + row * small_cell_h + CELL_GAP;
-                predefined_areas[cell_idx].x2 = br_x_start + (col + 1) * small_cell_w - CELL_GAP;
-                predefined_areas[cell_idx].y2 = br_y_start + (row + 1) * small_cell_h - CELL_GAP;
-                cell_idx++;
-            }
+/**
+ * @brief Clears previous element's electrons, orbits, and animations.
+ */
+static void clear_element_display(void) {
+    // (No changes needed in this function)
+    for (int i = 0; i < MAX_ELECTRONS; i++) {
+        if (electron_objs[i]) {
+            lv_anim_del(electron_objs[i], electron_anim_exec_cb);
+            lv_obj_del(electron_objs[i]);
+            electron_objs[i] = NULL;
         }
     }
-
-
-    // --- 创建 Treemap 单元格 UI 框架并初始化数据结构 ---
-    memset(treemap_ui_cells, 0, sizeof(treemap_ui_cells));
-    memset(current_stock_data, 0, sizeof(current_stock_data));
-
-    for (int i = 0; i < NUM_CELLS; ++i) {
-        lv_coord_t cell_w = lv_area_get_width(&predefined_areas[i]);
-        lv_coord_t cell_h = lv_area_get_height(&predefined_areas[i]);
-
-        if (cell_w < 1 || cell_h < 1) { /* ... 跳过无效单元格 ... */ continue; }
-
-        lv_obj_t * cell_container = lv_obj_create(main_container);
-        // ... (设置单元格样式) ...
-        lv_obj_remove_style_all(cell_container);
-        lv_obj_set_pos(cell_container, predefined_areas[i].x1, predefined_areas[i].y1);
-        lv_obj_set_size(cell_container, cell_w, cell_h);
-        lv_obj_set_style_radius(cell_container, CELL_RADIUS, 0);
-        lv_obj_set_style_bg_opa(cell_container, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(cell_container, CELL_BORDER_WIDTH, 0);
-        lv_obj_set_style_border_opa(cell_container, LV_OPA_COVER, 0);
-        lv_obj_set_layout(cell_container, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(cell_container, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(cell_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        treemap_ui_cells[i].cell_obj = cell_container;
-        create_cell_ui_elements(i, cell_container);
-
-        snprintf(current_stock_data[i].ticker_symbol, MAX_TICKER_LEN, "---");
-        current_stock_data[i].value = 0.0f;
-    }
-
-    // --- 使用初始数据首次更新 UI ---
-    data_update_task(NULL);
-
-    // --- 创建板块选择下拉列表 ---
-    lv_obj_t * dd = lv_dropdown_create(scr);
-    // ... (下拉列表设置与之前相同) ...
-    lv_dropdown_set_options(dd, "Tech Services\nElectronics\nFinance\nRetail\nHealth Tech\nOthers");
-    lv_obj_set_width(dd, 140);
-    lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 10, 10);
-    lv_obj_add_event_cb(dd, sector_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_dropdown_set_selected(dd, current_sector_index);
-    lv_obj_set_style_bg_color(dd, lv_color_hex(0x404040), 0);
-    lv_obj_set_style_bg_opa(dd, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(dd, lv_color_hex(0x606060), 0);
-    lv_obj_set_style_border_width(dd, 1, 0);
-    lv_obj_set_style_radius(dd, 5, 0);
-    lv_obj_set_style_text_color(dd, lv_color_white(), 0);
-    lv_obj_set_style_text_font(dd, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_pad_left(dd, 8, 0);
-    lv_obj_set_style_pad_right(dd, 8, 0);
-    lv_obj_set_style_pad_top(dd, 5, 0);
-    lv_obj_set_style_pad_bottom(dd, 5, 0);
-    lv_obj_t * list = lv_dropdown_get_list(dd);
-    if (list) {
-        lv_obj_set_style_bg_color(list, lv_color_hex(0x303030), 0);
-        lv_obj_set_style_border_color(list, lv_color_hex(0x505050), 0);
-        lv_obj_set_style_border_width(list, 1, 0);
-        lv_obj_set_style_radius(list, 5, 0);
-        lv_obj_set_style_text_color(list, lv_color_white(), 0);
-        lv_obj_set_style_text_font(list, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_pad_all(list, 5, 0);
-        lv_obj_set_style_bg_color(list, lv_palette_main(LV_PALETTE_BLUE), LV_PART_SELECTED | LV_STATE_CHECKED);
-        lv_obj_set_style_text_color(list, lv_color_white(), LV_PART_SELECTED | LV_STATE_CHECKED);
-    }
-
-    // --- 创建时间显示标签 ---
-    time_label = lv_label_create(scr);
-    // --- FIX: 设置时间标签样式 ---
-    lv_obj_set_style_text_color(time_label, lv_color_black(), 0); // <<< 设置为黑色
-    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_18, 0); // <<< 增大字体到 18
-    // lv_obj_set_style_text_font(time_label, &lv_font_montserrat_20, 0); // 或者尝试 20
-    lv_label_set_text(time_label, "00:00:00");
-    lv_obj_align(time_label, LV_ALIGN_TOP_RIGHT, -10, 10);
-
-    // --- 创建数据更新定时器 ---
-    if (data_update_timer) {
-        lv_timer_del(data_update_timer);
-        data_update_timer = NULL;
-    }
-    data_update_timer = lv_timer_create(data_update_task, UPDATE_INTERVAL_MS, NULL);
-
-    // --- 创建时间更新定时器 ---
-    if (time_update_timer) {
-        lv_timer_del(time_update_timer);
-        time_update_timer = NULL;
-    }
-    time_update_timer = lv_timer_create(time_update_task, TIME_UPDATE_INTERVAL_MS, NULL);
-
-    ESP_LOGI(TAG, "Simulated Treemap UI initialized with Styled Time.");
-}
-
-/**
- * @brief 创建单个单元格内部的 UI 元素 (标签) - 再次增大字体并区分大小 V2
- */
-static void create_cell_ui_elements(int index, lv_obj_t* parent_cell)
-{
-    // 设置父容器（单元格）的内边距
-    lv_obj_set_style_pad_ver(parent_cell, 4, 0);
-    lv_obj_set_style_pad_hor(parent_cell, 2, 0);
-
-    // 1. Ticker Label
-    lv_obj_t* ticker = lv_label_create(parent_cell);
-    lv_label_set_text(ticker, "..."); // Placeholder
-    lv_coord_t parent_h = lv_obj_get_height(parent_cell);
-    const lv_font_t* ticker_font;
-    if (parent_h > 180) { ticker_font = &lv_font_montserrat_28; }
-    else if (parent_h > 100) { ticker_font = &lv_font_montserrat_22; }
-    else if (parent_h > 60) { ticker_font = &lv_font_montserrat_18; }
-    else { ticker_font = &lv_font_montserrat_16; } // 最小用 16
-    lv_obj_set_style_text_font(ticker, ticker_font, 0);
-    lv_obj_set_style_text_color(ticker, lv_color_white(), 0);
-    lv_label_set_long_mode(ticker, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(ticker, lv_pct(100));
-    lv_obj_set_style_text_align(ticker, LV_TEXT_ALIGN_CENTER, 0);
-
-    // 2. Change Label
-    lv_obj_t* change = lv_label_create(parent_cell);
-    lv_label_set_text(change, " "); // Placeholder
-    const lv_font_t* change_font;
-     if (parent_h > 180) { change_font = &lv_font_montserrat_22; }
-    else if (parent_h > 100) { change_font = &lv_font_montserrat_18; }
-    else if (parent_h > 60) { change_font = &lv_font_montserrat_16; }
-    else { change_font = &lv_font_montserrat_14; } // 最小用 14
-    lv_obj_clear_flag(change, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(change, change_font, 0);
-    lv_obj_set_style_text_color(change, lv_color_white(), 0);
-    lv_obj_set_width(change, lv_pct(100));
-    lv_obj_set_style_text_align(change, LV_TEXT_ALIGN_CENTER, 0);
-
-    // Store UI pointers
-    treemap_ui_cells[index].ticker_label = ticker;
-    treemap_ui_cells[index].change_label = change;
-}
-
-
-/**
- * @brief 定时任务：获取数据（当前为模拟）并请求 UI 更新
- */
-static void data_update_task(lv_timer_t * timer)
-{
-    // ... (代码与上一版本相同, 模拟数据生成) ...
-    LV_UNUSED(timer);
-    ESP_LOGD(TAG, "Updating stock data for sector index: %d", current_sector_index);
-    if (current_sector_index < 0 || current_sector_index >= NUM_SECTORS) {
-        ESP_LOGE(TAG, "Invalid sector index: %d. Defaulting to 0.", current_sector_index);
-        current_sector_index = 0;
-    }
-    for (int i = 0; i < NUM_CELLS; ++i) {
-        strncpy(current_stock_data[i].ticker_symbol, sector_tickers[current_sector_index][i], MAX_TICKER_LEN - 1);
-        current_stock_data[i].ticker_symbol[MAX_TICKER_LEN - 1] = '\0';
-        uint32_t r = esp_random();
-        float normalized = (float)r / (float)UINT32_MAX;
-        float temp_value = normalized * (0.9999f * 2.0f) - 0.9999f;
-        if (isfinite(temp_value)) {
-            current_stock_data[i].value = temp_value;
-        } else {
-            current_stock_data[i].value = 0.0f;
+    for (int i = 0; i < MAX_SHELLS; i++) {
+        if (orbit_objs[i]) {
+            lv_obj_del(orbit_objs[i]);
+            orbit_objs[i] = NULL;
         }
     }
-    update_treemap_ui(current_stock_data);
-    ESP_LOGD(TAG, "Data update complete, UI refresh requested.");
+    // Keep the nucleus object, just realign if needed (though should be ok)
 }
 
 /**
- * @brief 定时任务：更新时间显示
+ * @brief Creates the visual representation (nucleus, orbits, electrons, animations) centered on screen.
+ * @param element_index Index in the `elements` array.
  */
-static void time_update_task(lv_timer_t * timer)
-{
-    // ... (代码与上一版本相同) ...
-    LV_UNUSED(timer);
-    time_t now;
-    struct tm timeinfo;
-    char time_str[9];
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    if (timeinfo.tm_year > (2016 - 1900)) {
-        strftime(time_str, sizeof(time_str), "%H:%M:%S", &timeinfo);
-    } else {
-        snprintf(time_str, sizeof(time_str), "--:--:--");
+static void create_element_display(uint8_t element_index) {
+    if (element_index >= sizeof(elements) / sizeof(elements[0])) {
+        return; // Invalid index
     }
-    if (time_label) {
-        lv_label_set_text(time_label, time_str);
+
+    clear_element_display(); // Remove the old display first
+
+    const element_info_t *element = &elements[element_index];
+    current_element_index = element_index;
+
+    // Update label text (Label position is set in my_ui_init)
+    lv_label_set_text_fmt(element_label, "%s - %s", element->symbol, element->name);
+
+    // Ensure Nucleus exists and is centered on the canvas (screen)
+    if (!nucleus_obj) {
+        nucleus_obj = lv_obj_create(animation_canvas); // Parent is the full screen canvas
+        lv_obj_remove_style_all(nucleus_obj);
+        lv_obj_add_style(nucleus_obj, &style_nucleus, 0);
+        lv_obj_set_size(nucleus_obj, NUCLEUS_RADIUS * 2, NUCLEUS_RADIUS * 2);
+    }
+    // Align nucleus to the globally calculated screen center
+    lv_obj_align(nucleus_obj, LV_ALIGN_CENTER, 0, 0);
+
+
+    // --- Create Orbits (Centered on Screen) ---
+    // Shell 1 Orbit Line
+    if (element->electrons_per_shell[0] > 0) {
+        orbit_objs[0] = lv_arc_create(animation_canvas); // Parent is the full screen canvas
+        lv_obj_remove_style(orbit_objs[0], NULL, LV_PART_KNOB);
+        lv_obj_clear_flag(orbit_objs[0], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_style(orbit_objs[0], &style_shell_line, LV_PART_MAIN);
+        lv_obj_add_style(orbit_objs[0], &style_shell_line, LV_PART_INDICATOR);
+        lv_obj_set_size(orbit_objs[0], SHELL1_RADIUS * 2, SHELL1_RADIUS * 2);
+        lv_arc_set_bg_angles(orbit_objs[0], 0, 360);
+        lv_arc_set_angles(orbit_objs[0], 0, 360);
+        lv_obj_align(orbit_objs[0], LV_ALIGN_CENTER, 0, 0); // Align to screen center
+    }
+     // Shell 2 Orbit Line
+    if (element->electrons_per_shell[1] > 0) {
+        orbit_objs[1] = lv_arc_create(animation_canvas); // Parent is the full screen canvas
+        lv_obj_remove_style(orbit_objs[1], NULL, LV_PART_KNOB);
+        lv_obj_clear_flag(orbit_objs[1], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_style(orbit_objs[1], &style_shell_line, LV_PART_MAIN);
+        lv_obj_add_style(orbit_objs[1], &style_shell_line, LV_PART_INDICATOR);
+        lv_obj_set_size(orbit_objs[1], SHELL2_RADIUS * 2, SHELL2_RADIUS * 2);
+        lv_arc_set_bg_angles(orbit_objs[1], 0, 360);
+        lv_arc_set_angles(orbit_objs[1], 0, 360);
+        lv_obj_align(orbit_objs[1], LV_ALIGN_CENTER, 0, 0); // Align to screen center
+    }
+
+    // --- Create Electrons and Animations (relative to screen center) ---
+    uint8_t electron_count = 0;
+    float start_angle_offset = 0;
+
+    // Shell 1 Electrons
+    uint8_t shell1_electrons = element->electrons_per_shell[0];
+    float angle_step1 = (shell1_electrons > 0) ? 360.0f / shell1_electrons : 0;
+    for (int i = 0; i < shell1_electrons && electron_count < MAX_ELECTRONS; i++) {
+        electron_objs[electron_count] = lv_obj_create(animation_canvas); // Parent is the canvas
+        lv_obj_remove_style_all(electron_objs[electron_count]);
+        lv_obj_add_style(electron_objs[electron_count], &style_electron, 0);
+        lv_obj_set_size(electron_objs[electron_count], ELECTRON_RADIUS * 2, ELECTRON_RADIUS * 2);
+        lv_obj_set_user_data(electron_objs[electron_count], (void*)(lv_uintptr_t)SHELL1_RADIUS);
+
+        int32_t start_angle = (int32_t)(start_angle_offset + i * angle_step1) % 360;
+        lv_anim_init(&electron_anims[electron_count]);
+        lv_anim_set_var(&electron_anims[electron_count], electron_objs[electron_count]);
+        lv_anim_set_exec_cb(&electron_anims[electron_count], electron_anim_exec_cb);
+        lv_anim_set_values(&electron_anims[electron_count], start_angle, start_angle + 359);
+        lv_anim_set_time(&electron_anims[electron_count], ANIMATION_TIME_MS + (rand() % 500 - 250));
+        lv_anim_set_playback_time(&electron_anims[electron_count], 0);
+        lv_anim_set_repeat_count(&electron_anims[electron_count], LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&electron_anims[electron_count]);
+        electron_count++;
+    }
+
+    // Shell 2 Electrons
+    uint8_t shell2_electrons = element->electrons_per_shell[1];
+    float angle_step2 = (shell2_electrons > 0) ? 360.0f / shell2_electrons : 0;
+    start_angle_offset = 45;
+    for (int i = 0; i < shell2_electrons && electron_count < MAX_ELECTRONS; i++) {
+         electron_objs[electron_count] = lv_obj_create(animation_canvas); // Parent is the canvas
+        lv_obj_remove_style_all(electron_objs[electron_count]);
+        lv_obj_add_style(electron_objs[electron_count], &style_electron, 0);
+        lv_obj_set_size(electron_objs[electron_count], ELECTRON_RADIUS * 2, ELECTRON_RADIUS * 2);
+        lv_obj_set_user_data(electron_objs[electron_count], (void*)(lv_uintptr_t)SHELL2_RADIUS);
+
+        int32_t start_angle = (int32_t)(start_angle_offset + i * angle_step2) % 360;
+        lv_anim_init(&electron_anims[electron_count]);
+        lv_anim_set_var(&electron_anims[electron_count], electron_objs[electron_count]);
+        lv_anim_set_exec_cb(&electron_anims[electron_count], electron_anim_exec_cb);
+        lv_anim_set_values(&electron_anims[electron_count], start_angle, start_angle + 359);
+        lv_anim_set_time(&electron_anims[electron_count], ANIMATION_TIME_MS + (rand() % 500 - 250));
+        lv_anim_set_playback_time(&electron_anims[electron_count], 0);
+        lv_anim_set_repeat_count(&electron_anims[electron_count], LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&electron_anims[electron_count]);
+        electron_count++;
     }
 }
 
 
 /**
- * @brief 根据传入的数据数组更新整个 Treemap 的 UI 显示 (纯色)
+ * @brief Event callback for element selection buttons.
  */
-static void update_treemap_ui(const stock_data_t data_array[])
-{
-    // ... (代码与上一版本相同) ...
-    ESP_LOGD(TAG, "Updating Treemap UI from data (Solid Color)...");
-    for (int i = 0; i < NUM_CELLS; ++i) {
-        treemap_ui_cell_t *ui_cell = &treemap_ui_cells[i];
-        const stock_data_t *data = &data_array[i];
-        if (ui_cell->cell_obj && ui_cell->ticker_label && ui_cell->change_label) {
-            float value = data->value;
-            if (!isfinite(value)) { value = 0.0f; }
-            lv_color_t base_color = get_color_for_value(value);
-            lv_obj_set_style_bg_color(ui_cell->cell_obj, base_color, 0);
-            lv_color_t border_color;
-            uint8_t brightness = lv_color_brightness(base_color);
-            if (brightness > 128) { border_color = lv_color_darken(base_color, LV_OPA_20); }
-            else { border_color = lv_color_lighten(base_color, LV_OPA_20); }
-            lv_obj_set_style_border_color(ui_cell->cell_obj, border_color, 0);
-            lv_label_set_text(ui_cell->ticker_label, data->ticker_symbol);
-            char buffer[16];
-            float percentage_value = value * 100.0f;
-            if (isfinite(percentage_value)) {
-                int written = snprintf(buffer, sizeof(buffer), "%+.2f%%", percentage_value);
-                if (written >= 0 && written < sizeof(buffer)) { lv_label_set_text(ui_cell->change_label, buffer); }
-                else { lv_label_set_text(ui_cell->change_label, "ERR"); }
-            } else { lv_label_set_text(ui_cell->change_label, "N/A"); }
-            lv_color_t text_color = (brightness < 128) ? lv_color_white() : lv_color_black();
-            lv_obj_set_style_text_color(ui_cell->ticker_label, text_color, 0);
-            lv_obj_set_style_text_color(ui_cell->change_label, text_color, 0);
-        } else { ESP_LOGW(TAG, "UI elements for cell %d missing.", i); }
-    }
-     ESP_LOGD(TAG, "Treemap UI update complete.");
-}
-
-
-/**
- * @brief 根据数值（股价变动）获取对应的颜色
- */
-static lv_color_t get_color_for_value(float value)
-{
-    // ... (代码与上一版本相同) ...
-    if (!isfinite(value)) { return lv_color_hex(0x303030); }
-    float clamped_value = LV_CLAMP(-0.05f, value, 0.05f);
-    if (clamped_value > 0.0005f) {
-        lv_color_t dark_green = lv_color_hex(0x005000);
-        lv_color_t bright_green = lv_color_hex(0x32CD32);
-        uint8_t mix_ratio = (uint8_t)(clamped_value * 20.0f * 255.0f);
-        mix_ratio = LV_MIN(mix_ratio, 255);
-        return lv_color_mix(bright_green, dark_green, mix_ratio);
-    } else if (clamped_value < -0.0005f) {
-        lv_color_t dark_red = lv_color_hex(0x600000);
-        lv_color_t bright_red = lv_color_hex(0xFF4500);
-        uint8_t mix_ratio = (uint8_t)(-clamped_value * 20.0f * 255.0f);
-         mix_ratio = LV_MIN(mix_ratio, 255);
-        return lv_color_mix(bright_red, dark_red, mix_ratio);
-    } else {
-        return lv_color_hex(0x303030);
-    }
-}
-
-/**
- * @brief 板块选择下拉列表的事件回调函数
- */
-static void sector_dropdown_event_cb(lv_event_t * e)
-{
-    // ... (代码与上一版本相同) ...
+static void element_select_event_cb(lv_event_t * e) {
+    // (No changes needed in this function)
     lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t * dropdown = lv_event_get_target(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        int selected_index = lv_dropdown_get_selected(dropdown);
-        if (selected_index != current_sector_index) {
-            current_sector_index = selected_index;
-            char buf[64];
-            lv_dropdown_get_selected_str(dropdown, buf, sizeof(buf));
-            ESP_LOGI(TAG, "Sector changed to: %s (index: %d)", buf, current_sector_index);
-            data_update_task(NULL);
+    lv_obj_t * btn = lv_event_get_target(e);
+
+    if (code == LV_EVENT_CLICKED) {
+        uint8_t index = (uint8_t)(lv_uintptr_t)lv_obj_get_user_data(btn);
+        if (index != current_element_index) {
+           LV_LOG_USER("Button clicked for element index: %d", index);
+           create_element_display(index);
         }
     }
 }
 
 /**
- * @brief （可选）销毁或清理 Treemap 界面资源
+ * @brief Initialize the custom UI elements: Animation centered on full screen, overlays for label/buttons.
  */
-/*
-void my_ui_heatmap_deinit(void)
-{
-    ESP_LOGI(TAG, "Deinitializing Treemap UI...");
-    // 删除数据更新定时器
-    if (data_update_timer) {
-        lv_timer_del(data_update_timer);
-        data_update_timer = NULL;
+void my_ui_init(void) {
+    // Get the active screen
+    lv_obj_t * screen = lv_scr_act();
+    lv_obj_clean(screen); // Clear screen if reusing
+
+    // Calculate the absolute center of the screen
+    center_x = SCREEN_WIDTH / 2;
+    center_y = SCREEN_HEIGHT / 2;
+
+    // --- Initialize Styles (Same as before) ---
+    // Nucleus Style
+    lv_style_init(&style_nucleus);
+    lv_style_set_radius(&style_nucleus, LV_RADIUS_CIRCLE);
+    lv_style_set_bg_opa(&style_nucleus, LV_OPA_COVER);
+    lv_style_set_bg_color(&style_nucleus, lv_palette_main(LV_PALETTE_DEEP_ORANGE));
+    lv_style_set_border_width(&style_nucleus, 0);
+
+    // Electron Style
+    lv_style_init(&style_electron);
+    lv_style_set_radius(&style_electron, LV_RADIUS_CIRCLE);
+    lv_style_set_bg_opa(&style_electron, LV_OPA_COVER);
+    lv_style_set_bg_color(&style_electron, lv_palette_lighten(LV_PALETTE_LIGHT_BLUE, 1));
+    lv_style_set_border_width(&style_electron, 1);
+    lv_style_set_border_color(&style_electron, lv_palette_main(LV_PALETTE_GREY));
+
+
+    // Orbit Line Style
+    lv_style_init(&style_shell_line);
+    lv_style_set_arc_color(&style_shell_line, lv_palette_lighten(LV_PALETTE_GREY, 2));
+    lv_style_set_arc_width(&style_shell_line, ORBIT_LINE_WIDTH);
+    lv_style_set_bg_opa(&style_shell_line, LV_OPA_TRANSP); // Make bg part transparent
+    lv_style_set_arc_rounded(&style_shell_line, false); // Ensure full circle line
+
+    // Button Style
+    lv_style_init(&style_button);
+    lv_style_set_radius(&style_button, 8);
+    lv_style_set_bg_opa(&style_button, LV_OPA_COVER);
+    lv_style_set_bg_color(&style_button, lv_palette_main(LV_PALETTE_BLUE_GREY));
+    lv_style_set_border_width(&style_button, 1);
+    lv_style_set_border_color(&style_button, lv_palette_lighten(LV_PALETTE_BLUE_GREY, 2));
+    lv_style_set_text_color(&style_button, lv_color_white());
+    lv_style_set_pad_ver(&style_button, 10);
+    lv_style_set_pad_hor(&style_button, 5);
+
+
+    // --- Create Full Screen Canvas for Animation ---
+    animation_canvas = lv_obj_create(screen);
+    lv_obj_remove_style_all(animation_canvas); // Remove border/padding
+    lv_obj_set_size(animation_canvas, SCREEN_WIDTH, SCREEN_HEIGHT); // Cover entire screen
+    lv_obj_align(animation_canvas, LV_ALIGN_CENTER, 0, 0);
+    // Set background color directly on the canvas
+    lv_obj_set_style_bg_color(animation_canvas, lv_palette_darken(LV_PALETTE_GREY, 4), 0); // Dark grey background
+    lv_obj_set_style_bg_opa(animation_canvas, LV_OPA_COVER, 0);
+
+
+    // --- Create Element Name Label (Overlay on Top) ---
+    element_label = lv_label_create(animation_canvas); // Parent is the canvas
+    lv_obj_set_width(element_label, lv_pct(90)); // Use 90% width
+    lv_obj_set_style_text_align(element_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(element_label, lv_color_white(), 0);
+    // Align to Top-Mid of the parent (canvas) with some padding
+    lv_obj_align(element_label, LV_ALIGN_TOP_MID, 0, 15); // 15px padding from top
+
+
+    // --- Create Button Container (Overlay on Bottom) ---
+    button_container = lv_obj_create(animation_canvas); // Parent is the canvas
+    lv_obj_remove_style_all(button_container); // Remove its own background/border/padding
+    lv_obj_set_width(button_container, lv_pct(95)); // Use 95% of screen width
+    lv_obj_set_height(button_container, LV_SIZE_CONTENT); // Height determined by buttons
+    lv_obj_set_flex_flow(button_container, LV_FLEX_FLOW_ROW); // Arrange buttons horizontally
+    lv_obj_set_flex_align(button_container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(button_container, 8, 0); // Gap between buttons
+    // Align container to the Bottom-Mid of the parent (canvas) with padding
+    lv_obj_align(button_container, LV_ALIGN_BOTTOM_MID, 0, -15); // -15px padding from bottom
+
+    // Create buttons for each element inside the container
+    for (uint8_t i = 0; i < sizeof(elements) / sizeof(elements[0]); i++) {
+        lv_obj_t * btn = lv_btn_create(button_container);
+        lv_obj_add_style(btn, &style_button, 0); // Apply custom button style
+        lv_obj_set_user_data(btn, (void*)(lv_uintptr_t)i);
+        lv_obj_add_event_cb(btn, element_select_event_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t * lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, elements[i].symbol);
+        lv_obj_center(lbl);
     }
-    // 删除时间更新定时器
-    if (time_update_timer) {
-        lv_timer_del(time_update_timer);
-        time_update_timer = NULL;
-    }
 
-    // 删除下拉列表 (需要将其设为静态或全局变量才能在这里访问)
-    // if(sector_dropdown) lv_obj_del(sector_dropdown);
 
-    // 删除时间标签
-    // if(time_label) lv_obj_del(time_label); // time_label 已经是静态全局
+    // --- Final Steps ---
+    // Reset object pointers (important before first create)
+    for (int i = 0; i < MAX_ELECTRONS; i++) { electron_objs[i] = NULL; }
+    for (int i = 0; i < MAX_SHELLS; i++) { orbit_objs[i] = NULL; }
+    nucleus_obj = NULL; // Ensure nucleus is created fresh
 
-    // 删除单元格
-    for (int i = 0; i < NUM_CELLS; ++i) {
-        if (treemap_ui_cells[i].cell_obj) {
-            lv_obj_del(treemap_ui_cells[i].cell_obj);
-            treemap_ui_cells[i].cell_obj = NULL;
-            // ...
-        }
-    }
-    // 删除主容器 (需要将其设为静态或全局变量才能在这里访问)
-    // if(main_container) lv_obj_del(main_container);
 
-    ESP_LOGI(TAG, "Treemap UI deinitialized.");
+    // --- Display the first element initially ---
+    // Center X/Y are now correctly calculated for the full screen
+    create_element_display(0); // Start with Hydrogen
+
+    LV_LOG_USER("Custom UI Initialized: Animation screen-centered.");
 }
-*/

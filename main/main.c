@@ -256,7 +256,7 @@ void app_main(void)
     // --- 5. 初始化你的 UI ---
     ESP_LOGI(TAG, "Initializing Custom UI...");
     lv_port_sem_take(); // 获取 LVGL 信号量
-    my_ui_heatmap_init(); // 调用你的 UI 初始化函数
+    my_ui_init();  
     lv_port_sem_give(); // 释放 LVGL 信号量
     ESP_LOGI(TAG, "Custom UI Initialized.");
 
