@@ -54,7 +54,8 @@ void my_ui_init(void)
     lv_obj_t *tab4_page = lv_tabview_add_tab(tabview, "Proj");
     lv_obj_t *tab5_page = lv_tabview_add_tab(tabview, "SHM");
     lv_obj_t *tab6_page = lv_tabview_add_tab(tabview, "Optics");
-    lv_obj_t *tab7_page = lv_tabview_add_tab(tabview, "Circuit");
+    // lv_obj_t *tab7_page = lv_tabview_add_tab(tabview, "Circuit");
+    lv_obj_t *tab7_page = lv_tabview_add_tab(tabview, "Button");
 
     // 3. Call the initialization function for each page, passing its container
     if (tab1_page) { page_01_formulas_init(tab1_page); ESP_LOGD(TAG, "Page 1 (Formula) initialized."); }
