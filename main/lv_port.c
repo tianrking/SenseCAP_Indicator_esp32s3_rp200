@@ -49,7 +49,7 @@ void lv_port_init(void)
     lv_port_disp_init();
     lv_port_indev_init();
     lv_port_tick_init();
-
+    // lv_png_init();
     lvgl_mutex = xSemaphoreCreateMutex();
     xTaskCreate(lvgl_task, "lvgl_task", 4096, NULL, CONFIG_LCD_TASK_PRIORITY, &lvgl_task_handle);
 }

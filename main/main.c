@@ -1,34 +1,136 @@
-// Copyright 2015-2022 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+// main.c
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+
 #include "bsp_board.h"
-#include "lv_demos.h" // 虽然不用 demo 了，但 lv_port 依赖它，或者你可以修改 lv_port
 #include "lv_port.h"
+#include "my_ui.h" // my_ui.h 中包含 extern volatile bool g_wifi_is_connected;
 
-#include "my_ui.h" // <<< 包含你自定义 UI 的头文件
-
-#define LOG_MEM_INFO        1 // 保留内存日志功能
+#define LOG_MEM_INFO 1
 
 static const char *TAG = "app_main";
 
+// WiFi 配置
+#define WIFI_SSID      "SEEED_Solution" // 请确保这是您要连接的SSID
+#define WIFI_PASSWORD  "chck1208"     // 请确保这是正确的密码
+
+static EventGroupHandle_t s_wifi_event_group;
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+static int s_retry_num = 0;
+#define WIFI_MAXIMUM_RETRY  5
+
+// 全局 WiFi 连接状态标志
+volatile bool g_wifi_is_connected = false; // <<< 定义全局变量
+
+static void event_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+        ESP_LOGI(TAG, "Wi-Fi station mode started, trying to connect...");
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        g_wifi_is_connected = false; 
+        ESP_LOGW(TAG, "WiFi Disconnected");
+        if (s_retry_num < WIFI_MAXIMUM_RETRY) {
+            esp_wifi_connect();
+            s_retry_num++;
+            ESP_LOGI(TAG, "Retry to connect to the AP (%d/%d)", s_retry_num, WIFI_MAXIMUM_RETRY);
+        } else {
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            ESP_LOGE(TAG, "Connect to the AP failed after %d retries", s_retry_num);
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "Got IP address: " IPSTR, IP2STR(&event->ip_info.ip));
+        s_retry_num = 0;
+        g_wifi_is_connected = true; 
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
+void wifi_init_sta(void) {
+    s_wifi_event_group = xEventGroupCreate();
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &event_handler,
+                                                        NULL,
+                                                        &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &event_handler,
+                                                        NULL,
+                                                        &instance_got_ip));
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASSWORD,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    
+    ESP_LOGI(TAG, "Disabling WiFi Modem Sleep (WIFI_PS_NONE)");
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    ESP_LOGI(TAG, "wifi_init_sta finished. Waiting for connection...");
+
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+            pdFALSE,
+            pdFALSE,
+            portMAX_DELAY);
+
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Connected to AP SSID:%s", WIFI_SSID);
+        g_wifi_is_connected = true; 
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGE(TAG, "Failed to connect to SSID:%s", WIFI_SSID);
+        g_wifi_is_connected = false;
+    } else {
+        ESP_LOGE(TAG, "UNEXPECTED WIFI EVENT");
+        g_wifi_is_connected = false;
+    }
+}
+
 void app_main(void)
 {
-    ESP_LOGI(TAG, "System start"); // 使用 TAG
+    ESP_LOGI(TAG, "System start");
 
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    ESP_LOGI(TAG, "Initializing WiFi...");
+    wifi_init_sta();
+
+    if (!g_wifi_is_connected) {
+        ESP_LOGE(TAG, "WiFi not connected post init! Map functionality will be severely limited or non-functional.");
+    }
+
+    ESP_LOGI(TAG, "Initializing board and LVGL port...");
     ESP_ERROR_CHECK(bsp_board_init());
     lv_port_init();
 
@@ -41,25 +143,18 @@ void app_main(void)
 #endif
 #endif
 
-    lv_port_sem_take(); // 获取 LVGL 信号量
-
-    // --- 注释掉或删除原来的 demo 调用 ---
-    // lv_demo_widgets();      /* A widgets example. This is what you get out of the box */
-    // lv_demo_music();        /* A modern, smartphone-like music player demo. */
-    // lv_demo_stress();       /* A stress test for LVGL. */
-    // lv_demo_benchmark();    /* A demo to measure the performance of LVGL or to compare different settings. */
-
-    // --- 调用你自己的 UI 初始化函数 ---
-    my_ui_init(); // <<< 初始化你的自定义界面
-
-    lv_port_sem_give(); // 释放 LVGL 信号量
+    lv_port_sem_take();
+    // my_ui_init();
+     lv_png_init();
+    my_ui_init_single_tile();
+    lv_port_sem_give();
 
 #if LOG_MEM_INFO
-    static char buffer[128];    /* Make sure buffer is enough for `sprintf` */
+    static char buffer[128];
     while (1) {
         sprintf(buffer, "   Biggest /     Free /    Total\n"
-                "\t  DRAM : [%8d / %8d / %8d]\n"
-                "\t PSRAM : [%8d / %8d / %8d]",
+                "\t  DRAM : [%8zu / %8zu / %8zu]\n"
+                "\t PSRAM : [%8zu / %8zu / %8zu]",
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 heap_caps_get_total_size(MALLOC_CAP_INTERNAL),
@@ -67,7 +162,7 @@ void app_main(void)
                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                 heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
         ESP_LOGI("MEM", "%s", buffer);
-
+        ESP_LOGI(TAG, "Current WiFi Connection Status: %s", g_wifi_is_connected ? "CONNECTED" : "DISCONNECTED");
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 #endif
